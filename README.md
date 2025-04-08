@@ -8,9 +8,9 @@
  - Feed forward
  - Layer normalization
  - Skip connections
+ - Train it on shakespeare data
 
  ### TO DO
- - Train a small model on a dataset
  - Vectorize operations and remove redundancies/slow code
  - Add GPU acceleration support
 

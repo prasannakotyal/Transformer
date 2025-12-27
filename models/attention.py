@@ -9,6 +9,7 @@ Implements:
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from typing import Optional, Tuple
 
 
 class Head(nn.Module):
@@ -25,14 +26,12 @@ class Head(nn.Module):
         embedding_dim: int,
         context_length: int,
         dropout: float = 0.0,
-        return_attention: bool = False,
     ):
         super().__init__()
         self.head_size = head_size
         self.embedding_dim = embedding_dim
         self.context_length = context_length
         self.dropout = dropout
-        self.return_attention = return_attention
 
         self.key_layer = nn.Linear(
             in_features=embedding_dim, out_features=head_size, bias=False
@@ -50,12 +49,15 @@ class Head(nn.Module):
 
         self.dropout_layer = nn.Dropout(dropout)
 
-    def forward(self, x: torch.Tensor):
+    def forward(
+        self, x: torch.Tensor, return_attention: bool = False
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         """
         Forward pass of attention head.
 
         Args:
             x: Input tensor of shape (batch, time, channels)
+            return_attention: Whether to return attention weights
 
         Returns:
             out: Context vectors of shape (batch, time, head_size)
@@ -74,16 +76,16 @@ class Head(nn.Module):
         k = self.key_layer(x)
         v = self.value_layer(x)
 
-        weights = (q @ k.transpose(-2, -1)) * self.head_size**-0.5
+        weights = (q @ k.transpose(-2, -1)) * (self.head_size**-0.5)
         weights = weights.masked_fill(self.tril[:T, :T] == 0, float("-inf"))
         weights = F.softmax(weights, dim=-1)
         weights = self.dropout_layer(weights)
 
         out = weights @ v
 
-        if self.return_attention:
+        if return_attention:
             return out, weights
-        return out
+        return out, None
 
 
 class MultiHeadAttention(nn.Module):
@@ -100,7 +102,6 @@ class MultiHeadAttention(nn.Module):
         embedding_dim: int,
         context_length: int,
         dropout: float = 0.0,
-        return_attention: bool = False,
     ):
         super().__init__()
         self.num_heads = num_heads
@@ -108,7 +109,6 @@ class MultiHeadAttention(nn.Module):
         self.embedding_dim = embedding_dim
         self.context_length = context_length
         self.dropout = dropout
-        self.return_attention = return_attention
 
         self.heads = nn.ModuleList(
             [
@@ -117,7 +117,6 @@ class MultiHeadAttention(nn.Module):
                     embedding_dim=embedding_dim,
                     context_length=context_length,
                     dropout=dropout,
-                    return_attention=return_attention,
                 )
                 for _ in range(num_heads)
             ]
@@ -128,12 +127,15 @@ class MultiHeadAttention(nn.Module):
         )
         self.dropout_layer = nn.Dropout(dropout)
 
-    def forward(self, x: torch.Tensor):
+    def forward(
+        self, x: torch.Tensor, return_attention: bool = False
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         """
         Forward pass of multi-head attention.
 
         Args:
             x: Input tensor of shape (batch, time, embedding_dim)
+            return_attention: Whether to return attention weights
 
         Returns:
             out: Concatenated head outputs, shape (batch, time, embedding_dim)
@@ -143,19 +145,16 @@ class MultiHeadAttention(nn.Module):
         attention_weights_list = []
 
         for head in self.heads:
-            if self.return_attention:
-                out, weights = head(x)
-                head_outputs.append(out)
+            out, weights = head(x, return_attention=return_attention)
+            head_outputs.append(out)
+            if return_attention and weights is not None:
                 attention_weights_list.append(weights)
-            else:
-                out = head(x)
-                head_outputs.append(out)
 
         out = torch.cat(head_outputs, dim=-1)
         out = self.projection_layer(out)
         out = self.dropout_layer(out)
 
-        if self.return_attention:
+        if return_attention and attention_weights_list:
             attention_weights = torch.stack(attention_weights_list, dim=1)
             return out, attention_weights
-        return out
+        return out, None

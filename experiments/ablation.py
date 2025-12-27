@@ -4,6 +4,12 @@ Runs all architectural experiments and compares results.
 """
 
 import argparse
+import sys
+from pathlib import Path
+
+# Add project root to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 import yaml
 from experiments.trainer import Trainer
 from experiments.config import ExperimentConfig

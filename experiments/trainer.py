@@ -3,7 +3,13 @@ Training loop with experiment tracking.
 """
 
 import os
+import sys
 import json
+from pathlib import Path
+
+# Add project root to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 import torch
 from torch.cuda.amp import autocast, GradScaler
 from tqdm import tqdm

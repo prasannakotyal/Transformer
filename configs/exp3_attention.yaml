@@ -1,28 +1,25 @@
-# Experiment 3: Multi-head Attention Analysis
-# Visualize and analyze attention patterns across heads
+# Experiment 3: Attention Analysis
+# Train with attention capture for visualization
 
 name: exp3_attention
-dataset: gutenberg
 data_path: data/gutenberg_subset/all_books.txt
 output_dir: outputs/
-max_iters: 2000
-batch_size: 64
-learning_rate: 3e-4
+
+# Model
 embedding_dim: 384
 num_layers: 6
 num_heads: 6
 context_length: 256
 dropout: 0.2
-seed: 1337
-use_mixed_precision: true
-gradient_accumulation: 1
+return_attention: true
+
+# Training
+max_iters: 2000
+batch_size: 64
+learning_rate: 3e-4
+warmup_iters: 100
 eval_interval: 100
 eval_iters: 50
-warmup_iters: 100
-return_attention: true  # Enable attention capture for visualization
-
-# Single variant with attention capture
-variants:
-  - name: baseline_attention
-    pos_enc_type: absolute
-    norm_type: pre
+use_mixed_precision: true
+gradient_accumulation: 1
+seed: 1337

@@ -3,7 +3,6 @@ from .attention import Head, MultiHeadAttention
 from .feed_forward import FeedForwardNetwork
 from .positional_encodings import (
     AbsolutePositionalEncoding,
-    RotaryPositionalEncoding,
     NoPositionalEncoding,
 )
 
@@ -13,6 +12,5 @@ __all__ = [
     "MultiHeadAttention",
     "FeedForwardNetwork",
     "AbsolutePositionalEncoding",
-    "RotaryPositionalEncoding",
     "NoPositionalEncoding",
 ]

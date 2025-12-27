@@ -1,155 +1,112 @@
 """
 Ablation experiment runner.
-
 Runs all architectural experiments and compares results.
 """
 
-import os
 import argparse
 import yaml
 from experiments.trainer import Trainer
 from experiments.config import ExperimentConfig
-from experiments.visualize import create_all_visualizations
 
 
-def run_variant(config_path: str, variant_name: str, variant_config: dict):
-    """
-    Run single variant of an experiment.
-
-    Args:
-        config_path: Path to base config file
-        variant_name: Name of this variant
-        variant_config: Dict of config overrides
-    """
+def run_experiment(config_path: str, name: str, overrides: dict):
+    """Run single experiment variant."""
     print(f"\n{'=' * 60}")
-    print(f"Running variant: {variant_name}")
+    print(f"Running: {name}")
     print(f"{'=' * 60}")
 
-    # Load base config
     with open(config_path, "r") as f:
         config_dict = yaml.safe_load(f)
 
-    # Apply variant overrides
-    config_dict.update(variant_config)
-    config_dict["name"] = f"{config_dict.get('name', 'exp')}_{variant_name}"
+    config_dict.update(overrides)
+    config_dict["name"] = name
 
-    # Create config object
     config = ExperimentConfig(**config_dict)
-
-    # Run training
     trainer = Trainer(config)
     trainer.train()
 
-    print(f"Variant {variant_name} complete!")
-    print(f"{'=' * 60}")
-
-
-def run_experiment_group(config_path: str, group_name: str, variants: dict):
-    """
-    Run all variants for an experiment group.
-
-    Args:
-        config_path: Path to base config file
-        group_name: Name of experiment group
-        variants: Dict of {variant_name: variant_config}
-    """
-    print(f"\n{'#' * 60}")
-    print(f"# Experiment Group: {group_name}")
-    print(f"{'#' * 60}\n")
-
-    for variant_name, variant_config in variants.items():
-        try:
-            run_variant(config_path, variant_name, variant_config)
-        except Exception as e:
-            print(f"Error in {variant_name}: {e}")
-            continue
-
-    print(f"\n{'#' * 60}")
-    print(f"# All variants for {group_name} complete!")
-    print(f"{'#' * 60}\n")
+    print(f"Completed: {name}")
 
 
 def main():
     parser = argparse.ArgumentParser(description="Run transformer ablation experiments")
     parser.add_argument(
-        "--config", type=str, required=False, help="Path to config YAML file"
-    )
-    parser.add_argument(
-        "--exp",
-        type=str,
-        required=False,
-        help="Experiment group to run (exp1, exp2, exp3)",
+        "--exp", type=str, help="Run specific experiment (exp1, exp2, exp3)"
     )
     parser.add_argument("--all", action="store_true", help="Run all experiments")
-    parser.add_argument(
-        "--visualize",
-        action="store_true",
-        help="Generate visualizations after training",
-    )
     args = parser.parse_args()
 
     if args.all:
-        # Run all experiment groups
-        print("Running all experiments...")
+        print("Running all experiments (5 variants total)...")
 
-        # Experiment 1: Positional Encodings
-        run_experiment_group(
+        # Experiment 1: Positional Encodings (2 variants)
+        run_experiment(
             "configs/exp1_pos_enc.yaml",
-            "Positional Encoding",
-            {
-                "none": {"pos_enc_type": "none", "name": "none_encoding"},
-                "absolute": {"pos_enc_type": "absolute", "name": "absolute_encoding"},
-                "rotary": {"pos_enc_type": "rotary", "name": "rotary_encoding"},
-            },
+            "exp1_none_encoding",
+            {"pos_enc_type": "none", "norm_type": "pre"},
+        )
+        run_experiment(
+            "configs/exp1_pos_enc.yaml",
+            "exp1_absolute_encoding",
+            {"pos_enc_type": "absolute", "norm_type": "pre"},
         )
 
-        # Experiment 2: Normalization
-        run_experiment_group(
+        # Experiment 2: Normalization (2 variants)
+        run_experiment(
             "configs/exp2_norm.yaml",
-            "Normalization",
-            {
-                "pre": {"norm_type": "pre", "name": "pre_norm"},
-                "post": {"norm_type": "post", "name": "post_norm"},
-            },
+            "exp2_pre_norm",
+            {"pos_enc_type": "absolute", "norm_type": "pre"},
+        )
+        run_experiment(
+            "configs/exp2_norm.yaml",
+            "exp2_post_norm",
+            {"pos_enc_type": "absolute", "norm_type": "post"},
         )
 
-        # Experiment 3: Attention Analysis
-        run_experiment_group(
+        # Experiment 3: Attention Analysis (1 variant)
+        run_experiment(
             "configs/exp3_attention.yaml",
-            "Attention Analysis",
-            {
-                "baseline": {"return_attention": True, "name": "baseline_attention"},
-            },
+            "exp3_attention_analysis",
+            {"pos_enc_type": "absolute", "norm_type": "pre", "return_attention": True},
         )
 
-        print("\nAll experiments complete!")
-
-        if args.visualize:
-            print("\nGenerating visualizations...")
-            create_all_visualizations()
-            print("Visualizations complete!")
+        print("\n" + "=" * 60)
+        print("All experiments complete!")
+        print("=" * 60)
 
     elif args.exp:
-        # Run specific experiment group
-        exp_map = {
-            "exp1": ("Positional Encoding", "configs/exp1_pos_enc.yaml"),
-            "exp2": ("Normalization", "configs/exp2_norm.yaml"),
-            "exp3": ("Attention Analysis", "configs/exp3_attention.yaml"),
+        experiments = {
+            "exp1": [
+                (
+                    "configs/exp1_pos_enc.yaml",
+                    "exp1_none_encoding",
+                    {"pos_enc_type": "none"},
+                ),
+                (
+                    "configs/exp1_pos_enc.yaml",
+                    "exp1_absolute_encoding",
+                    {"pos_enc_type": "absolute"},
+                ),
+            ],
+            "exp2": [
+                ("configs/exp2_norm.yaml", "exp2_pre_norm", {"norm_type": "pre"}),
+                ("configs/exp2_norm.yaml", "exp2_post_norm", {"norm_type": "post"}),
+            ],
+            "exp3": [
+                (
+                    "configs/exp3_attention.yaml",
+                    "exp3_attention_analysis",
+                    {"return_attention": True},
+                ),
+            ],
         }
 
-        if args.exp in exp_map:
-            group_name, config_path = exp_map[args.exp]
-
-            # Load config to get variants
-            with open(config_path, "r") as f:
-                config_dict = yaml.safe_load(f)
-
-            variants = config_dict.get("variants", {})
-
-            run_experiment_group(config_path, group_name, variants)
+        if args.exp in experiments:
+            for config_path, name, overrides in experiments[args.exp]:
+                run_experiment(config_path, name, overrides)
         else:
             print(f"Unknown experiment: {args.exp}")
-            print(f"Available: {list(exp_map.keys())}")
+            print(f"Available: {list(experiments.keys())}")
     else:
         parser.print_help()
 

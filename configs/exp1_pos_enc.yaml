@@ -1,35 +1,24 @@
 # Experiment 1: Positional Encoding Ablation
-# Compare none, absolute, rotary positional encodings
+# Compare none vs absolute positional encodings
 
 name: exp1_positional_encoding
-dataset: gutenberg
 data_path: data/gutenberg_subset/all_books.txt
 output_dir: outputs/
-max_iters: 2000
-batch_size: 64
-learning_rate: 3e-4
+
+# Model
 embedding_dim: 384
 num_layers: 6
 num_heads: 6
 context_length: 256
 dropout: 0.2
-seed: 1337
-use_mixed_precision: true
-gradient_accumulation: 1
+
+# Training
+max_iters: 2000
+batch_size: 64
+learning_rate: 3e-4
+warmup_iters: 100
 eval_interval: 100
 eval_iters: 50
-warmup_iters: 100
-
-# Variants
-variants:
-  - name: none_encoding
-    pos_enc_type: none
-    norm_type: pre
-    
-  - name: absolute_encoding
-    pos_enc_type: absolute
-    norm_type: pre
-    
-  - name: rotary_encoding
-    pos_enc_type: rotary
-    norm_type: pre
+use_mixed_precision: true
+gradient_accumulation: 1
+seed: 1337

@@ -2,30 +2,23 @@
 # Compare pre-norm vs post-norm training stability
 
 name: exp2_normalization
-dataset: gutenberg
 data_path: data/gutenberg_subset/all_books.txt
 output_dir: outputs/
-max_iters: 2000
-batch_size: 64
-learning_rate: 3e-4
+
+# Model
 embedding_dim: 384
 num_layers: 6
 num_heads: 6
 context_length: 256
 dropout: 0.2
-seed: 1337
-use_mixed_precision: true
-gradient_accumulation: 1
+
+# Training
+max_iters: 2000
+batch_size: 64
+learning_rate: 3e-4
+warmup_iters: 100
 eval_interval: 100
 eval_iters: 50
-warmup_iters: 100
-
-# Variants
-variants:
-  - name: pre_norm
-    pos_enc_type: absolute
-    norm_type: pre
-    
-  - name: post_norm
-    pos_enc_type: absolute
-    norm_type: post
+use_mixed_precision: true
+gradient_accumulation: 1
+seed: 1337

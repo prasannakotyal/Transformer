@@ -1,0 +1,24 @@
+# Experiment 2: Normalization Placement
+# Compare pre-norm vs post-norm training stability
+
+name: exp2_normalization
+dataset: gutenberg
+max_iters: 2000
+batch_size: 32
+learning_rate: 3e-4
+embedding_dim: 384
+num_layers: 6
+num_heads: 6
+context_length: 256
+dropout: 0.2
+seed: 1337
+
+# Variants
+variants:
+  - name: pre_norm
+    pos_enc_type: absolute
+    norm_type: pre
+    
+  - name: post_norm
+    pos_enc_type: absolute
+    norm_type: post

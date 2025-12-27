@@ -1,0 +1,28 @@
+# Experiment 1: Positional Encoding Ablation
+# Compare none, absolute, rotary positional encodings
+
+name: exp1_positional_encoding
+dataset: gutenberg
+max_iters: 2000
+batch_size: 32
+learning_rate: 3e-4
+embedding_dim: 384
+num_layers: 6
+num_heads: 6
+context_length: 256
+dropout: 0.2
+seed: 1337
+
+# Variants
+variants:
+  - name: none_encoding
+    pos_enc_type: none
+    norm_type: pre
+    
+  - name: absolute_encoding
+    pos_enc_type: absolute
+    norm_type: pre
+    
+  - name: rotary_encoding
+    pos_enc_type: rotary
+    norm_type: pre

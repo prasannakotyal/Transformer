@@ -16,6 +16,7 @@ import math
 from pathlib import Path
 
 import torch
+import torch.nn.functional as F
 from torch.cuda.amp import autocast, GradScaler
 from tqdm import tqdm
 
@@ -30,7 +31,7 @@ from tokenizer import BPETokenizer
 # =============================================================================
 
 # Model
-VOCAB_SIZE = 100277  # tiktoken cl100k_base vocabulary size (GPT-4 compatible)
+VOCAB_SIZE = 4096  # BPE vocabulary size (balance between efficiency and memory)
 CONTEXT_LENGTH = 256  # Maximum sequence length
 EMBEDDING_DIM = 384  # Model dimension
 NUM_LAYERS = 6  # Number of transformer blocks

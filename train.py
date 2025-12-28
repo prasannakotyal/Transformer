@@ -365,7 +365,15 @@ def train():
             torch.save(checkpoint, CHECKPOINT_DIR / f"checkpoint_{iter_num:05d}.pt")
 
     # Save final checkpoint
-    torch.save(checkpoint, CHECKPOINT_DIR / "checkpoint_final.pt")
+    final_checkpoint = {
+        "iter": MAX_ITERS - 1,
+        "model_state_dict": model.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "train_loss": log["train_losses"][-1] if log["train_losses"] else 0.0,
+        "val_loss": log["val_losses"][-1] if log["val_losses"] else 0.0,
+        "config": log["config"],
+    }
+    torch.save(final_checkpoint, CHECKPOINT_DIR / "checkpoint_final.pt")
 
     # Save training log
     with open(LOG_FILE, "w") as f:

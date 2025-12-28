@@ -13,7 +13,6 @@ import json
 from pathlib import Path
 from typing import List, Tuple, Dict
 from collections import defaultdict
-import heapq
 
 
 class BPETokenizer:
@@ -130,8 +129,23 @@ class BPETokenizer:
         return result
 
     def encode(self, text: str) -> List[int]:
-        """Encode text to token IDs."""
-        token_ids = list(text.encode("utf-8"))
+        """Encode text to token IDs (chunked for large texts)."""
+        data = text.encode("utf-8")
+
+        # For large texts, encode in chunks to avoid O(n*m) on full text
+        if len(data) > 50_000:  # 50KB threshold
+            chunk_size = 10_000  # 10KB chunks
+            all_ids = []
+            for i in range(0, len(data), chunk_size):
+                chunk = data[i : i + chunk_size]
+                all_ids.extend(self._encode_chunk(chunk))
+            return all_ids
+
+        return self._encode_chunk(data)
+
+    def _encode_chunk(self, data: bytes) -> List[int]:
+        """Encode a small chunk of bytes to token IDs."""
+        token_ids = list(data)
 
         # Apply merges in order learned
         for pair, new_id in self.merges.items():

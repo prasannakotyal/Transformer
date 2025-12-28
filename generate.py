@@ -4,8 +4,8 @@ Text generation script with KV-cache demonstration.
 Shows efficient autoregressive generation using cached key-value pairs.
 
 Usage:
-    python generate.py --checkpoint outputs/checkpoints/checkpoint_final.pt
-    python generate.py --checkpoint outputs/checkpoints/checkpoint_final.pt --no-cache  # Compare speed
+    python generate.py --checkpoint outputs/checkpoints/checkpoint_best.pt
+    python generate.py --checkpoint outputs/checkpoints/checkpoint_best.pt --no-cache  # Compare speed
 """
 
 import sys
@@ -149,7 +149,7 @@ def main():
     parser.add_argument(
         "--checkpoint",
         type=str,
-        default="outputs/checkpoints/checkpoint_final.pt",
+        default="outputs/checkpoints/checkpoint_best.pt",
         help="Path to model checkpoint",
     )
     parser.add_argument(

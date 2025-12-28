@@ -1,8 +1,14 @@
 """
 Training script for Transformer Language Model.
 
-Downloads FineWeb-Edu data, trains BPE tokenizer, and trains the model.
-Designed to run on Kaggle T4x2 GPU in ~1-2 hours.
+Downloads FineWeb-Edu data and trains the model using gradient accumulation
+and mixed precision. Designed to run on Kaggle T4 GPU in ~3-5 hours.
+
+Features:
+- Gradient accumulation for larger effective batch size
+- Mixed precision training (FP16)
+- Cosine learning rate schedule with warmup
+- Best checkpoint saving based on validation loss
 
 Usage:
     python train.py
@@ -40,18 +46,19 @@ NUM_HEADS = 4  # Number of attention heads (must divide EMBEDDING_DIM)
 DROPOUT = 0.1  # Dropout probability
 
 # Training
-BATCH_SIZE = 32  # Batch size (reduced from 64 for memory with larger vocab)
-MAX_ITERS = 5000  # Total training iterations
-EVAL_INTERVAL = 250  # Evaluate every N iterations
-EVAL_ITERS = 100  # Number of batches for evaluation
-LEARNING_RATE = 3e-4  # Peak learning rate
-WARMUP_ITERS = 500  # Learning rate warmup steps
-MIN_LR = 3e-5  # Minimum learning rate
+BATCH_SIZE = 32  # Micro-batch size (per gradient accumulation step)
+GRAD_ACCUM_STEPS = 4  # Gradient accumulation steps (effective batch = 128)
+MAX_ITERS = 50000  # Total training iterations (~3-5 hours on T4)
+EVAL_INTERVAL = 2500  # Evaluate every N iterations
+EVAL_ITERS = 50  # Number of batches for evaluation
+LEARNING_RATE = 6e-4  # Peak learning rate
+WARMUP_ITERS = 2000  # Learning rate warmup steps
+MIN_LR = 6e-5  # Minimum learning rate
 GRAD_CLIP = 1.0  # Gradient clipping threshold
 WEIGHT_DECAY = 0.1  # AdamW weight decay
 
 # Data
-DATA_SIZE_MB = 50  # Amount of FineWeb-Edu data to download
+DATA_SIZE_MB = 100  # Amount of FineWeb-Edu data to download
 TRAIN_SPLIT = 0.9  # Train/validation split ratio
 
 # Paths
@@ -296,82 +303,97 @@ def train():
             "num_layers": NUM_LAYERS,
             "num_heads": NUM_HEADS,
             "batch_size": BATCH_SIZE,
+            "grad_accum_steps": GRAD_ACCUM_STEPS,
+            "effective_batch_size": BATCH_SIZE * GRAD_ACCUM_STEPS,
             "max_iters": MAX_ITERS,
             "learning_rate": LEARNING_RATE,
         },
         "train_losses": [],
         "val_losses": [],
         "iterations": [],
-        "samples": [],  # Text samples at different stages
     }
 
+    # Training metrics
+    tokens_per_iter = BATCH_SIZE * CONTEXT_LENGTH * GRAD_ACCUM_STEPS
+    best_val_loss = float("inf")
+    running_loss = 0.0
+
     # Training loop
-    print("\nStarting training...")
+    print(f"\nStarting training...")
+    print(f"  Tokens per iteration: {tokens_per_iter:,}")
+    print(f"  Total tokens: {tokens_per_iter * MAX_ITERS:,}")
     start_time = time.time()
 
     model.train()
-    for iter_num in tqdm(range(MAX_ITERS), desc="Training"):
+    pbar = tqdm(range(MAX_ITERS), desc="Training", ncols=100)
+
+    for iter_num in pbar:
         # Update learning rate
         lr = get_lr(iter_num)
         for param_group in optimizer.param_groups:
             param_group["lr"] = lr
 
-        # Get batch
-        x, y = train_loader.get_batch(device)
+        # Gradient accumulation loop (nanoGPT pattern)
+        for micro_step in range(GRAD_ACCUM_STEPS):
+            x, y = train_loader.get_batch(device)
 
-        # Forward pass with mixed precision
-        with autocast(dtype=torch.float16):
-            _, loss, _, _ = model(x, targets=y)
+            with autocast(dtype=torch.float16):
+                _, loss, _, _ = model(x, targets=y)
+                loss = loss / GRAD_ACCUM_STEPS  # Scale for accumulation
 
-        # Backward pass
-        scaler.scale(loss).backward()
+            scaler.scale(loss).backward()
 
-        # Gradient clipping
+        # Gradient clipping and optimizer step
         scaler.unscale_(optimizer)
         torch.nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP)
-
-        # Optimizer step
         scaler.step(optimizer)
         scaler.update()
         optimizer.zero_grad(set_to_none=True)
 
-        # Evaluation
-        if iter_num % EVAL_INTERVAL == 0 or iter_num == MAX_ITERS - 1:
-            losses = estimate_loss(model, train_loader, val_loader, device)
+        # Update running loss (exponential moving average)
+        running_loss = 0.99 * running_loss + 0.01 * (loss.item() * GRAD_ACCUM_STEPS)
 
-            elapsed = time.time() - start_time
-            print(
-                f"\nIter {iter_num}: "
-                f"train_loss={losses['train']:.4f}, "
-                f"val_loss={losses['val']:.4f}, "
-                f"lr={lr:.2e}, "
-                f"time={elapsed:.1f}s"
-            )
+        # Update progress bar
+        if iter_num % 50 == 0:
+            pbar.set_postfix({"loss": f"{running_loss:.3f}", "lr": f"{lr:.1e}"})
+
+        # Periodic evaluation
+        if (
+            iter_num > 0 and iter_num % EVAL_INTERVAL == 0
+        ) or iter_num == MAX_ITERS - 1:
+            losses = estimate_loss(model, train_loader, val_loader, device)
 
             # Log
             log["train_losses"].append(losses["train"])
             log["val_losses"].append(losses["val"])
             log["iterations"].append(iter_num)
 
-            # Generate sample
-            model.eval()
-            context = torch.zeros((1, 1), dtype=torch.long, device=device)
-            generated_ids = model.generate(context, max_new_tokens=100, temperature=0.8)
-            sample_text = tokenizer.decode(generated_ids[0].tolist())
-            log["samples"].append({"iter": iter_num, "text": sample_text[:500]})
-            print(f"Sample: {sample_text[:200]}...")
-            model.train()
+            elapsed = time.time() - start_time
+            tokens_processed = tokens_per_iter * (iter_num + 1)
+            tokens_per_sec = tokens_processed / elapsed
 
-            # Save checkpoint
-            checkpoint = {
-                "iter": iter_num,
-                "model_state_dict": model.state_dict(),
-                "optimizer_state_dict": optimizer.state_dict(),
-                "train_loss": losses["train"],
-                "val_loss": losses["val"],
-                "config": log["config"],
-            }
-            torch.save(checkpoint, CHECKPOINT_DIR / f"checkpoint_{iter_num:05d}.pt")
+            tqdm.write(
+                f"Iter {iter_num:>6d} | "
+                f"train: {losses['train']:.4f} | "
+                f"val: {losses['val']:.4f} | "
+                f"lr: {lr:.2e} | "
+                f"tok/s: {tokens_per_sec:.0f}"
+            )
+
+            # Save best checkpoint
+            if losses["val"] < best_val_loss:
+                best_val_loss = losses["val"]
+                checkpoint = {
+                    "iter": iter_num,
+                    "model_state_dict": model.state_dict(),
+                    "optimizer_state_dict": optimizer.state_dict(),
+                    "train_loss": losses["train"],
+                    "val_loss": losses["val"],
+                    "config": log["config"],
+                }
+                torch.save(checkpoint, CHECKPOINT_DIR / "checkpoint_best.pt")
+
+            model.train()
 
     # Save final checkpoint
     final_checkpoint = {
@@ -393,7 +415,8 @@ def train():
     print(f"Training complete in {total_time / 60:.1f} minutes")
     print(f"Final train loss: {log['train_losses'][-1]:.4f}")
     print(f"Final val loss: {log['val_losses'][-1]:.4f}")
-    print(f"Checkpoint saved to {CHECKPOINT_DIR}")
+    print(f"Best val loss: {best_val_loss:.4f}")
+    print(f"Checkpoints saved to {CHECKPOINT_DIR}")
     print(f"Training log saved to {LOG_FILE}")
     print("=" * 60)
 

@@ -1,74 +1,143 @@
 """
-Main Transformer Language Model.
+Full Transformer Language Model.
 
-GPT-style decoder-only transformer with configurable architecture.
+GPT-style decoder-only transformer implementing "Attention Is All You Need".
+
+Architecture:
+    Input -> Token Embedding + Positional Encoding
+          -> N x (Multi-Head Attention -> Add & Norm -> FFN -> Add & Norm)
+          -> Linear -> Softmax -> Output
+
+Uses Pre-LayerNorm (more stable than original Post-LayerNorm).
 """
 
+import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from typing import Optional, Tuple, List
 
-from .attention import MultiHeadAttention
-from .feed_forward import FeedForwardNetwork
-from .positional_encodings import NoPositionalEncoding, AbsolutePositionalEncoding
+from .multi_head_attention import MultiHeadAttention
+from .kv_cache import KVCache
+
+
+class SinusoidalPositionalEncoding(nn.Module):
+    """
+    Sinusoidal positional encoding from "Attention Is All You Need".
+
+    PE(pos, 2i)   = sin(pos / 10000^(2i/d_model))
+    PE(pos, 2i+1) = cos(pos / 10000^(2i/d_model))
+    """
+
+    def __init__(self, embedding_dim: int, max_len: int = 5000):
+        super().__init__()
+
+        pe = torch.zeros(max_len, embedding_dim)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(
+            torch.arange(0, embedding_dim, 2).float()
+            * (-math.log(10000.0) / embedding_dim)
+        )
+
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+
+        # Register as buffer (not a parameter)
+        self.register_buffer("pe", pe.unsqueeze(0))  # (1, max_len, embedding_dim)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Add positional encoding to input."""
+        return x + self.pe[:, : x.size(1), :]
+
+
+class FeedForward(nn.Module):
+    """
+    Position-wise Feed-Forward Network.
+
+    FFN(x) = GELU(xW_1 + b_1)W_2 + b_2
+
+    Standard uses 4x expansion factor.
+    """
+
+    def __init__(self, embedding_dim: int, dropout: float = 0.1):
+        super().__init__()
+        hidden_dim = 4 * embedding_dim
+        self.net = nn.Sequential(
+            nn.Linear(embedding_dim, hidden_dim),
+            nn.GELU(),
+            nn.Linear(hidden_dim, embedding_dim),
+            nn.Dropout(dropout),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.net(x)
 
 
 class TransformerBlock(nn.Module):
     """
-    Transformer block: multi-head attention + feed forward.
-    Supports both pre-norm and post-norm variants.
+    Single transformer block.
+
+    Pre-LayerNorm architecture (more stable training):
+        x = x + Attention(LayerNorm(x))
+        x = x + FFN(LayerNorm(x))
     """
 
     def __init__(
         self,
-        num_heads: int,
         embedding_dim: int,
+        num_heads: int,
         context_length: int,
-        dropout: float = 0.2,
-        norm_type: str = "pre",
+        dropout: float = 0.1,
     ):
         super().__init__()
-        self.norm_type = norm_type
-        head_size = embedding_dim // num_heads
-
-        self.attention = MultiHeadAttention(
-            num_heads=num_heads,
-            head_size=head_size,
-            embedding_dim=embedding_dim,
-            context_length=context_length,
-            dropout=dropout,
+        self.ln1 = nn.LayerNorm(embedding_dim)
+        self.attn = MultiHeadAttention(
+            num_heads, embedding_dim, context_length, dropout
         )
-        self.ffn = FeedForwardNetwork(embedding_dim=embedding_dim, dropout=dropout)
-        self.norm1 = nn.LayerNorm(embedding_dim)
-        self.norm2 = nn.LayerNorm(embedding_dim)
+        self.ln2 = nn.LayerNorm(embedding_dim)
+        self.ffn = FeedForward(embedding_dim, dropout)
 
     def forward(
-        self, x: torch.Tensor, return_attention: bool = False
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
-        if self.norm_type == "pre":
-            attn_out, attn_weights = self.attention(
-                self.norm1(x), return_attention=return_attention
-            )
-            x = x + attn_out
-            x = x + self.ffn(self.norm2(x))
-        else:  # post-norm
-            attn_out, attn_weights = self.attention(
-                x, return_attention=return_attention
-            )
-            x = self.norm1(x + attn_out)
-            x = self.norm2(x + self.ffn(x))
+        self,
+        x: torch.Tensor,
+        kv_cache: Optional[List[Tuple[torch.Tensor, torch.Tensor]]] = None,
+        return_attention: bool = False,
+    ) -> Tuple[
+        torch.Tensor,
+        Optional[torch.Tensor],
+        Optional[List[Tuple[torch.Tensor, torch.Tensor]]],
+    ]:
+        """
+        Forward pass.
 
-        return x, attn_weights
+        Returns:
+            output: Block output
+            attn_weights: Attention weights if return_attention=True
+            new_kv_cache: Updated KV cache
+        """
+        # Pre-norm attention
+        attn_out, attn_weights, new_kv_cache = self.attn(
+            self.ln1(x), kv_cache=kv_cache, return_attention=return_attention
+        )
+        x = x + attn_out
+
+        # Pre-norm FFN
+        x = x + self.ffn(self.ln2(x))
+
+        return x, attn_weights, new_kv_cache
 
 
-class TransformerLanguageModel(nn.Module):
+class Transformer(nn.Module):
     """
-    GPT-style decoder-only transformer for language modeling.
+    GPT-style decoder-only Transformer.
 
-    Configurable architecture:
-    - pos_enc_type: 'none' or 'absolute'
-    - norm_type: 'pre' or 'post'
+    Args:
+        vocab_size: Vocabulary size
+        embedding_dim: Model dimension (d_model in paper)
+        num_layers: Number of transformer blocks
+        num_heads: Number of attention heads
+        context_length: Maximum sequence length
+        dropout: Dropout probability
     """
 
     def __init__(
@@ -78,81 +147,112 @@ class TransformerLanguageModel(nn.Module):
         num_layers: int = 6,
         num_heads: int = 6,
         context_length: int = 256,
-        dropout: float = 0.2,
-        pos_enc_type: str = "absolute",
-        norm_type: str = "pre",
-        return_attention: bool = False,
+        dropout: float = 0.1,
     ):
         super().__init__()
-        self.vocab_size = vocab_size
-        self.embedding_dim = embedding_dim
         self.context_length = context_length
-        self.return_attention = return_attention
+        self.num_layers = num_layers
+        self.num_heads = num_heads
 
-        # Token embeddings
+        # Token embedding
         self.token_embedding = nn.Embedding(vocab_size, embedding_dim)
 
-        # Positional encoding
-        if pos_enc_type == "none":
-            self.pos_encoding = NoPositionalEncoding(embedding_dim)
-        elif pos_enc_type == "absolute":
-            self.pos_encoding = AbsolutePositionalEncoding(
-                embedding_dim, context_length
-            )
-        else:
-            raise ValueError(
-                f"Unknown pos_enc_type: {pos_enc_type}. Use 'none' or 'absolute'."
-            )
+        # Sinusoidal positional encoding (from original paper)
+        self.pos_encoding = SinusoidalPositionalEncoding(embedding_dim, context_length)
 
         # Transformer blocks
         self.blocks = nn.ModuleList(
             [
-                TransformerBlock(
-                    num_heads, embedding_dim, context_length, dropout, norm_type
-                )
+                TransformerBlock(embedding_dim, num_heads, context_length, dropout)
                 for _ in range(num_layers)
             ]
         )
 
-        self.final_norm = nn.LayerNorm(embedding_dim)
-        self.lm_head = nn.Linear(embedding_dim, vocab_size)
+        # Final layer norm and output projection
+        self.ln_final = nn.LayerNorm(embedding_dim)
+        self.lm_head = nn.Linear(embedding_dim, vocab_size, bias=False)
+
+        # Weight tying (optional, reduces parameters)
+        self.token_embedding.weight = self.lm_head.weight
+
+        # Initialize weights
+        self.apply(self._init_weights)
+
+    def _init_weights(self, module: nn.Module) -> None:
+        """Initialize weights with small values for stable training."""
+        if isinstance(module, nn.Linear):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            if module.bias is not None:
+                torch.nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.Embedding):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
     def forward(
-        self, idx: torch.Tensor, targets: Optional[torch.Tensor] = None
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+        self,
+        idx: torch.Tensor,
+        targets: Optional[torch.Tensor] = None,
+        kv_cache: Optional[KVCache] = None,
+        return_attention: bool = False,
+    ) -> Tuple[
+        torch.Tensor,
+        Optional[torch.Tensor],
+        Optional[List[torch.Tensor]],
+        Optional[KVCache],
+    ]:
         """
         Forward pass.
 
         Args:
             idx: Input token indices (batch, seq_len)
-            targets: Optional target indices for loss computation
+            targets: Target token indices for loss computation
+            kv_cache: Optional KV cache for efficient generation
+            return_attention: Whether to return attention weights
 
         Returns:
-            logits: (batch, seq_len, vocab_size)
+            logits: Output logits (batch, seq_len, vocab_size)
             loss: Cross-entropy loss if targets provided
+            attentions: List of attention weights per layer if return_attention=True
+            kv_cache: Updated KV cache
         """
-        # Embeddings + positional encoding
-        x = self.token_embedding(idx)
-        x = x + self.pos_encoding(x)
+        B, T = idx.shape
+
+        # Token embeddings + positional encoding
+        x = self.token_embedding(idx)  # (B, T, embedding_dim)
+
+        # For cached generation, offset positional encoding
+        if kv_cache is not None and kv_cache.seq_len > 0:
+            pos_offset = kv_cache.seq_len
+            # Only add pos encoding for new positions
+            x = x + self.pos_encoding.pe[:, pos_offset : pos_offset + T, :]
+        else:
+            x = self.pos_encoding(x)
 
         # Transformer blocks
-        attention_cache = []
-        for block in self.blocks:
-            x, attn_weights = block(x, return_attention=self.return_attention)
-            if self.return_attention and attn_weights is not None:
-                attention_cache.append(attn_weights.detach().cpu())
+        attentions = []
+        for i, block in enumerate(self.blocks):
+            layer_cache = kv_cache.get(i) if kv_cache is not None else None
+            x, attn_weights, new_cache = block(
+                x, kv_cache=layer_cache, return_attention=return_attention
+            )
+            if kv_cache is not None:
+                kv_cache.update(i, new_cache)
+            if return_attention and attn_weights is not None:
+                attentions.append(attn_weights)
 
-        # Output
-        x = self.final_norm(x)
+        # Final layer norm and projection to vocab
+        x = self.ln_final(x)
         logits = self.lm_head(x)
 
-        # Loss
+        # Compute loss if targets provided
         loss = None
         if targets is not None:
-            B, T, C = logits.shape
-            loss = F.cross_entropy(logits.view(B * T, C), targets.view(B * T))
+            loss = F.cross_entropy(
+                logits.view(-1, logits.size(-1)),
+                targets.view(-1),
+                ignore_index=-1,
+            )
 
-        return logits, loss
+        return logits, loss, attentions if return_attention else None, kv_cache
 
     @torch.inference_mode()
     def generate(
@@ -161,25 +261,38 @@ class TransformerLanguageModel(nn.Module):
         max_new_tokens: int,
         temperature: float = 1.0,
         top_k: Optional[int] = None,
+        use_cache: bool = True,
     ) -> torch.Tensor:
         """
         Autoregressive text generation.
 
         Args:
-            idx: Context tokens (batch, seq_len)
+            idx: Starting token indices (batch, seq_len)
             max_new_tokens: Number of tokens to generate
             temperature: Sampling temperature (lower = more deterministic)
-            top_k: Sample from top k tokens only
+            top_k: If set, only sample from top k tokens
+            use_cache: Whether to use KV cache for efficiency
 
         Returns:
-            Generated sequence (batch, seq_len + max_new_tokens)
+            Generated token indices (batch, seq_len + max_new_tokens)
         """
-        for _ in range(max_new_tokens):
-            # Crop to context length
-            idx_cond = idx[:, -self.context_length :]
+        # Initialize KV cache
+        kv_cache = KVCache(self.num_layers, self.num_heads) if use_cache else None
 
-            # Get predictions
-            logits, _ = self(idx_cond)
+        # Process initial context
+        if use_cache and idx.size(1) > 1:
+            logits, _, _, kv_cache = self.forward(idx[:, :-1], kv_cache=kv_cache)
+            idx_current = idx[:, -1:]
+        else:
+            idx_current = idx
+
+        for _ in range(max_new_tokens):
+            # Crop to context length if needed
+            if not use_cache and idx_current.size(1) > self.context_length:
+                idx_current = idx_current[:, -self.context_length :]
+
+            # Forward pass
+            logits, _, _, kv_cache = self.forward(idx_current, kv_cache=kv_cache)
             logits = logits[:, -1, :] / temperature
 
             # Top-k filtering
@@ -190,6 +303,29 @@ class TransformerLanguageModel(nn.Module):
             # Sample
             probs = F.softmax(logits, dim=-1)
             idx_next = torch.multinomial(probs, num_samples=1)
+
+            # Append
             idx = torch.cat([idx, idx_next], dim=1)
+            idx_current = idx_next
 
         return idx
+
+    def count_parameters(self) -> int:
+        """Count total trainable parameters."""
+        return sum(p.numel() for p in self.parameters() if p.requires_grad)
+
+
+# Quick test
+if __name__ == "__main__":
+    model = Transformer(vocab_size=1000, embedding_dim=128, num_layers=2, num_heads=4)
+    print(f"Parameters: {model.count_parameters():,}")
+
+    # Test forward
+    x = torch.randint(0, 1000, (2, 16))
+    logits, loss, _, _ = model(x, targets=x)
+    print(f"Logits shape: {logits.shape}")
+    print(f"Loss: {loss.item():.4f}")
+
+    # Test generation
+    generated = model.generate(x[:, :4], max_new_tokens=10)
+    print(f"Generated shape: {generated.shape}")

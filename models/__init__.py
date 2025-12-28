@@ -1,16 +1,13 @@
-from .transformer import TransformerLanguageModel
-from .attention import Head, MultiHeadAttention
-from .feed_forward import FeedForwardNetwork
-from .positional_encodings import (
-    AbsolutePositionalEncoding,
-    NoPositionalEncoding,
-)
+"""
+Transformer model components.
 
-__all__ = [
-    "TransformerLanguageModel",
-    "Head",
-    "MultiHeadAttention",
-    "FeedForwardNetwork",
-    "AbsolutePositionalEncoding",
-    "NoPositionalEncoding",
-]
+Implements the architecture from "Attention Is All You Need" (Vaswani et al., 2017)
+with a decoder-only (GPT-style) configuration.
+"""
+
+from .self_attention import SelfAttention
+from .multi_head_attention import MultiHeadAttention
+from .kv_cache import KVCache
+from .transformer import Transformer
+
+__all__ = ["SelfAttention", "MultiHeadAttention", "KVCache", "Transformer"]

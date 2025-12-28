@@ -1,13 +1,22 @@
+# Data and outputs
+data/
+outputs/
+*.pt
+*.pth
+
+# Python
 __pycache__/
 *.pyc
+*.pyo
+.ruff_cache/
 .venv/
 venv/
 env/
-outputs/
-*.log
-.DS_Store
+
+# IDE
 .vscode/
 .idea/
-gutenberg_subset/
-*.pt
-*.pth
+
+# Misc
+.DS_Store
+*.log

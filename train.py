@@ -83,7 +83,7 @@ def download_fineweb_edu(size_mb: int = 50) -> str:
 
         # Load streaming dataset
         dataset = load_dataset(
-            "HuggingFaceFW/fineweb-edu-score-2",
+            "HuggingFaceFW/fineweb-edu",
             name="sample-10BT",
             split="train",
             streaming=True,

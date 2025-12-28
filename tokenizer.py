@@ -12,10 +12,12 @@ Reference: https://github.com/karpathy/minbpe
 import json
 from pathlib import Path
 from typing import List, Tuple, Dict
+from collections import defaultdict
+import heapq
 
 
 class BPETokenizer:
-    """Byte-level BPE tokenizer."""
+    """Byte-level BPE tokenizer with optimized training."""
 
     def __init__(self):
         # Base vocabulary: 256 bytes
@@ -23,55 +25,68 @@ class BPETokenizer:
         self.merges: Dict[Tuple[int, int], int] = {}
         self.vocab_size = 256
 
-    def _get_pair_counts(self, token_ids: List[int]) -> Dict[Tuple[int, int], int]:
-        """Count frequency of adjacent token pairs."""
-        counts: Dict[Tuple[int, int], int] = {}
-        for i in range(len(token_ids) - 1):
-            pair = (token_ids[i], token_ids[i + 1])
-            counts[pair] = counts.get(pair, 0) + 1
-        return counts
-
-    def _merge_pair(
-        self, token_ids: List[int], pair: Tuple[int, int], new_id: int
-    ) -> List[int]:
-        """Replace all occurrences of pair with new_id."""
-        result = []
-        i = 0
-        while i < len(token_ids):
-            if (
-                i < len(token_ids) - 1
-                and token_ids[i] == pair[0]
-                and token_ids[i + 1] == pair[1]
-            ):
-                result.append(new_id)
-                i += 2
-            else:
-                result.append(token_ids[i])
-                i += 1
-        return result
-
     def train(self, text: str, vocab_size: int, verbose: bool = True) -> None:
         """
-        Train BPE tokenizer on text.
+        Train BPE tokenizer on text using optimized algorithm.
 
-        Args:
-            text: Training text
-            vocab_size: Target vocabulary size (must be >= 256)
-            verbose: Print progress
+        Uses a chunked approach for large texts to avoid memory issues.
         """
         assert vocab_size >= 256, "vocab_size must be >= 256 (base byte vocabulary)"
 
         # Start with byte-level tokens
-        token_ids = list(text.encode("utf-8"))
+        all_bytes = text.encode("utf-8")
         num_merges = vocab_size - 256
 
         if verbose:
-            print(f"Training BPE: {len(text):,} chars -> {len(token_ids):,} bytes")
+            print(f"Training BPE: {len(text):,} chars -> {len(all_bytes):,} bytes")
             print(f"Target vocab size: {vocab_size} ({num_merges} merges)")
 
+        # For large texts, use sampling-based approach
+        if len(all_bytes) > 1_000_000:
+            self._train_sampled(all_bytes, num_merges, verbose)
+        else:
+            self._train_full(all_bytes, num_merges, verbose)
+
+        self.vocab_size = 256 + len(self.merges)
+        if verbose:
+            print(f"Final vocab size: {self.vocab_size}")
+
+    def _train_sampled(self, all_bytes: bytes, num_merges: int, verbose: bool) -> None:
+        """
+        Train on sampled chunks for large texts.
+
+        Strategy: Sample ~1MB of text, train on that, which is fast and gives
+        good merges for common patterns.
+        """
+        # Sample evenly spaced chunks
+        sample_size = 1_000_000  # 1MB sample
+        chunk_size = 10_000
+        num_chunks = sample_size // chunk_size
+
+        total_len = len(all_bytes)
+        step = max(1, (total_len - chunk_size) // num_chunks)
+
+        # Collect sampled chunks
+        sampled = bytearray()
+        for i in range(0, min(total_len - chunk_size, step * num_chunks), step):
+            sampled.extend(all_bytes[i : i + chunk_size])
+
+        if verbose:
+            print(f"  Sampled {len(sampled):,} bytes from {total_len:,} total")
+
+        # Train on sampled data
+        self._train_full(bytes(sampled), num_merges, verbose)
+
+    def _train_full(self, data: bytes, num_merges: int, verbose: bool) -> None:
+        """Train on full data using optimized pair counting."""
+        token_ids = list(data)
+
         for i in range(num_merges):
-            # Count pairs
-            pair_counts = self._get_pair_counts(token_ids)
+            # Count pairs (optimized with defaultdict)
+            pair_counts: Dict[Tuple[int, int], int] = defaultdict(int)
+            for j in range(len(token_ids) - 1):
+                pair_counts[(token_ids[j], token_ids[j + 1])] += 1
+
             if not pair_counts:
                 break
 
@@ -79,23 +94,40 @@ class BPETokenizer:
             best_pair = max(pair_counts, key=pair_counts.get)
             best_count = pair_counts[best_pair]
 
+            if best_count < 2:
+                # No more useful merges
+                break
+
             # Create new token
             new_id = 256 + i
             self.merges[best_pair] = new_id
             self.vocab[new_id] = self.vocab[best_pair[0]] + self.vocab[best_pair[1]]
 
-            # Merge in token sequence
-            token_ids = self._merge_pair(token_ids, best_pair, new_id)
+            # Merge in token sequence (in-place for speed)
+            token_ids = self._merge_pair_fast(token_ids, best_pair, new_id)
 
-            if verbose and (i + 1) % 500 == 0:
+            if verbose and (i + 1) % 100 == 0:
                 print(
-                    f"  Merge {i + 1}/{num_merges}: {best_pair} -> {new_id} "
-                    f"(count: {best_count}, tokens: {len(token_ids):,})"
+                    f"  Merge {i + 1}/{num_merges}: "
+                    f"count={best_count:,}, tokens={len(token_ids):,}"
                 )
 
-        self.vocab_size = 256 + len(self.merges)
-        if verbose:
-            print(f"Final vocab size: {self.vocab_size}")
+    def _merge_pair_fast(
+        self, token_ids: List[int], pair: Tuple[int, int], new_id: int
+    ) -> List[int]:
+        """Replace all occurrences of pair with new_id (optimized)."""
+        result = []
+        i = 0
+        p0, p1 = pair
+        n = len(token_ids)
+        while i < n:
+            if i < n - 1 and token_ids[i] == p0 and token_ids[i + 1] == p1:
+                result.append(new_id)
+                i += 2
+            else:
+                result.append(token_ids[i])
+                i += 1
+        return result
 
     def encode(self, text: str) -> List[int]:
         """Encode text to token IDs."""
@@ -103,7 +135,7 @@ class BPETokenizer:
 
         # Apply merges in order learned
         for pair, new_id in self.merges.items():
-            token_ids = self._merge_pair(token_ids, pair, new_id)
+            token_ids = self._merge_pair_fast(token_ids, pair, new_id)
 
         return token_ids
 

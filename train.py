@@ -30,7 +30,7 @@ from tokenizer import BPETokenizer
 # =============================================================================
 
 # Model
-VOCAB_SIZE = 4096  # BPE vocabulary size
+VOCAB_SIZE = 100277  # tiktoken cl100k_base vocabulary size (GPT-4 compatible)
 CONTEXT_LENGTH = 256  # Maximum sequence length
 EMBEDDING_DIM = 384  # Model dimension
 NUM_LAYERS = 6  # Number of transformer blocks

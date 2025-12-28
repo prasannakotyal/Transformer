@@ -1,202 +1,113 @@
 """
-Byte-level BPE Tokenizer from scratch.
+Tokenizer wrapper using tiktoken (OpenAI's fast BPE tokenizer).
 
-Inspired by Karpathy's minbpe. Implements the core BPE algorithm:
-1. Start with byte-level tokens (256 base vocabulary)
-2. Iteratively merge most frequent adjacent pairs
-3. Build vocabulary up to target size
+Uses pre-trained BPE models for efficient tokenization without needing
+to train from scratch. Focus on the transformer model, not tokenization.
 
-Reference: https://github.com/karpathy/minbpe
+Reference: https://github.com/openai/tiktoken
 """
 
 import json
 from pathlib import Path
-from typing import List, Tuple, Dict
-from collections import defaultdict
+from typing import List
+import tiktoken
 
 
 class BPETokenizer:
-    """Byte-level BPE tokenizer with optimized training."""
+    """
+    BPE tokenizer using tiktoken.
 
-    def __init__(self):
-        # Base vocabulary: 256 bytes
-        self.vocab: Dict[int, bytes] = {i: bytes([i]) for i in range(256)}
-        self.merges: Dict[Tuple[int, int], int] = {}
-        self.vocab_size = 256
+    Uses OpenAI's cl100k_base encoding (GPT-4 compatible).
+    """
+
+    def __init__(self, encoding_name: str = "cl100k_base"):
+        """
+        Initialize tokenizer.
+
+        Args:
+            encoding_name: tiktoken encoding name (default: cl100k_base for GPT-4)
+        """
+        self.encoding = tiktoken.get_encoding(encoding_name)
+        self.encoding_name = encoding_name
+        self.vocab_size = self.encoding.n_vocab
 
     def train(self, text: str, vocab_size: int, verbose: bool = True) -> None:
         """
-        Train BPE tokenizer on text using optimized algorithm.
+        No-op - using pre-trained tiktoken model.
 
-        Uses a chunked approach for large texts to avoid memory issues.
+        Args:
+            text: Training text (ignored, using pre-trained model)
+            vocab_size: Target vocab size (ignored, using pre-trained model)
+            verbose: Whether to print training info
         """
-        assert vocab_size >= 256, "vocab_size must be >= 256 (base byte vocabulary)"
-
-        # Start with byte-level tokens
-        all_bytes = text.encode("utf-8")
-        num_merges = vocab_size - 256
-
         if verbose:
-            print(f"Training BPE: {len(text):,} chars -> {len(all_bytes):,} bytes")
-            print(f"Target vocab size: {vocab_size} ({num_merges} merges)")
-
-        # For large texts, use sampling-based approach
-        if len(all_bytes) > 1_000_000:
-            self._train_sampled(all_bytes, num_merges, verbose)
-        else:
-            self._train_full(all_bytes, num_merges, verbose)
-
-        self.vocab_size = 256 + len(self.merges)
-        if verbose:
-            print(f"Final vocab size: {self.vocab_size}")
-
-    def _train_sampled(self, all_bytes: bytes, num_merges: int, verbose: bool) -> None:
-        """
-        Train on sampled chunks for large texts.
-
-        Strategy: Sample ~1MB of text, train on that, which is fast and gives
-        good merges for common patterns.
-        """
-        # Sample evenly spaced chunks
-        sample_size = 1_000_000  # 1MB sample
-        chunk_size = 10_000
-        num_chunks = sample_size // chunk_size
-
-        total_len = len(all_bytes)
-        step = max(1, (total_len - chunk_size) // num_chunks)
-
-        # Collect sampled chunks
-        sampled = bytearray()
-        for i in range(0, min(total_len - chunk_size, step * num_chunks), step):
-            sampled.extend(all_bytes[i : i + chunk_size])
-
-        if verbose:
-            print(f"  Sampled {len(sampled):,} bytes from {total_len:,} total")
-
-        # Train on sampled data
-        self._train_full(bytes(sampled), num_merges, verbose)
-
-    def _train_full(self, data: bytes, num_merges: int, verbose: bool) -> None:
-        """Train on full data using optimized pair counting."""
-        token_ids = list(data)
-
-        for i in range(num_merges):
-            # Count pairs (optimized with defaultdict)
-            pair_counts: Dict[Tuple[int, int], int] = defaultdict(int)
-            for j in range(len(token_ids) - 1):
-                pair_counts[(token_ids[j], token_ids[j + 1])] += 1
-
-            if not pair_counts:
-                break
-
-            # Find most frequent pair
-            best_pair = max(pair_counts, key=pair_counts.get)
-            best_count = pair_counts[best_pair]
-
-            if best_count < 2:
-                # No more useful merges
-                break
-
-            # Create new token
-            new_id = 256 + i
-            self.merges[best_pair] = new_id
-            self.vocab[new_id] = self.vocab[best_pair[0]] + self.vocab[best_pair[1]]
-
-            # Merge in token sequence (in-place for speed)
-            token_ids = self._merge_pair_fast(token_ids, best_pair, new_id)
-
-            if verbose and (i + 1) % 100 == 0:
-                print(
-                    f"  Merge {i + 1}/{num_merges}: "
-                    f"count={best_count:,}, tokens={len(token_ids):,}"
-                )
-
-    def _merge_pair_fast(
-        self, token_ids: List[int], pair: Tuple[int, int], new_id: int
-    ) -> List[int]:
-        """Replace all occurrences of pair with new_id (optimized)."""
-        result = []
-        i = 0
-        p0, p1 = pair
-        n = len(token_ids)
-        while i < n:
-            if i < n - 1 and token_ids[i] == p0 and token_ids[i + 1] == p1:
-                result.append(new_id)
-                i += 2
-            else:
-                result.append(token_ids[i])
-                i += 1
-        return result
+            print(f"Using pre-trained tiktoken model: {self.encoding_name}")
+            print(f"Vocabulary size: {self.vocab_size:,}")
+            print("No training needed - using OpenAI's pre-trained BPE merges")
 
     def encode(self, text: str) -> List[int]:
-        """Encode text to token IDs (chunked for large texts)."""
-        data = text.encode("utf-8")
+        """
+        Encode text to token IDs.
 
-        # For large texts, encode in chunks to avoid O(n*m) on full text
-        if len(data) > 50_000:  # 50KB threshold
-            chunk_size = 10_000  # 10KB chunks
-            all_ids = []
-            for i in range(0, len(data), chunk_size):
-                chunk = data[i : i + chunk_size]
-                all_ids.extend(self._encode_chunk(chunk))
-            return all_ids
+        Args:
+            text: Input text
 
-        return self._encode_chunk(data)
-
-    def _encode_chunk(self, data: bytes) -> List[int]:
-        """Encode a small chunk of bytes to token IDs."""
-        token_ids = list(data)
-
-        # Apply merges in order learned
-        for pair, new_id in self.merges.items():
-            token_ids = self._merge_pair_fast(token_ids, pair, new_id)
-
-        return token_ids
+        Returns:
+            List of token IDs
+        """
+        return self.encoding.encode(text)
 
     def decode(self, token_ids: List[int]) -> str:
-        """Decode token IDs to text."""
-        byte_sequence = b"".join(self.vocab[id] for id in token_ids)
-        return byte_sequence.decode("utf-8", errors="replace")
+        """
+        Decode token IDs to text.
+
+        Args:
+            token_ids: List of token IDs
+
+        Returns:
+            Decoded text
+        """
+        return self.encoding.decode(token_ids)
 
     def save(self, path: str) -> None:
-        """Save tokenizer to file."""
-        path = Path(path)
+        """
+        Save tokenizer config.
+
+        Args:
+            path: Path to save config
+        """
+        path_obj = Path(path)
         data = {
+            "encoding_name": self.encoding_name,
             "vocab_size": self.vocab_size,
-            # Convert tuple keys to strings for JSON
-            "merges": {f"{p[0]},{p[1]}": v for p, v in self.merges.items()},
         }
-        path.write_text(json.dumps(data, indent=2))
+        path_obj.write_text(json.dumps(data, indent=2))
 
     def load(self, path: str) -> None:
-        """Load tokenizer from file."""
-        path = Path(path)
-        data = json.loads(path.read_text())
+        """
+        Load tokenizer config.
 
+        Args:
+            path: Path to load config from
+        """
+        path_obj = Path(path)
+        data = json.loads(path_obj.read_text())
+        self.encoding = tiktoken.get_encoding(data["encoding_name"])
+        self.encoding_name = data["encoding_name"]
         self.vocab_size = data["vocab_size"]
-        # Reconstruct merges with tuple keys
-        self.merges = {
-            tuple(map(int, k.split(","))): v for k, v in data["merges"].items()
-        }
-        # Rebuild vocab from merges
-        self.vocab = {i: bytes([i]) for i in range(256)}
-        for pair, new_id in self.merges.items():
-            self.vocab[new_id] = self.vocab[pair[0]] + self.vocab[pair[1]]
 
 
 # Quick test
 if __name__ == "__main__":
     tokenizer = BPETokenizer()
 
-    # Test on small text
-    text = "hello world! hello hello world" * 100
-    tokenizer.train(text, vocab_size=280, verbose=True)
-
     # Test encode/decode
-    test = "hello world!"
-    encoded = tokenizer.encode(test)
+    test_text = "Hello, world! This is a test of the tokenizer."
+    encoded = tokenizer.encode(test_text)
     decoded = tokenizer.decode(encoded)
-    print(f"\nTest: '{test}'")
+
+    print(f"Original: '{test_text}'")
     print(f"Encoded: {encoded}")
     print(f"Decoded: '{decoded}'")
-    print(f"Roundtrip OK: {test == decoded}")
+    print(f"Roundtrip OK: {test_text == decoded}")
+    print(f"Vocab size: {tokenizer.vocab_size:,}")

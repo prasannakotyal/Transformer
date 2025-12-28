@@ -31,15 +31,16 @@ from tokenizer import BPETokenizer
 # =============================================================================
 
 # Model
-VOCAB_SIZE = 4096  # BPE vocabulary size (balance between efficiency and memory)
+# VOCAB_SIZE is derived from tokenizer at runtime (following nanoGPT pattern)
+# This ensures tokenizer and model vocab sizes always match
 CONTEXT_LENGTH = 256  # Maximum sequence length
-EMBEDDING_DIM = 384  # Model dimension
+EMBEDDING_DIM = 256  # Model dimension (reduced from 384 for larger vocab)
 NUM_LAYERS = 6  # Number of transformer blocks
-NUM_HEADS = 6  # Number of attention heads
+NUM_HEADS = 4  # Number of attention heads (must divide EMBEDDING_DIM)
 DROPOUT = 0.1  # Dropout probability
 
 # Training
-BATCH_SIZE = 64  # Batch size (adjust for GPU memory)
+BATCH_SIZE = 32  # Batch size (reduced from 64 for memory with larger vocab)
 MAX_ITERS = 5000  # Total training iterations
 EVAL_INTERVAL = 250  # Evaluate every N iterations
 EVAL_ITERS = 100  # Number of batches for evaluation
@@ -241,9 +242,16 @@ def train():
         print(f"Loading tokenizer from {tokenizer_path}")
         tokenizer.load(str(tokenizer_path))
     else:
-        print("Training BPE tokenizer...")
-        tokenizer.train(text, vocab_size=VOCAB_SIZE, verbose=True)
+        print("Using pre-trained tiktoken tokenizer...")
+        tokenizer.train(text, vocab_size=0, verbose=True)  # No-op for tiktoken
         tokenizer.save(str(tokenizer_path))
+
+    # Derive vocab_size from tokenizer, pad to multiple of 64 for GPU efficiency
+    # This follows nanoGPT's approach: "50257 rounded up to 50304 for efficiency"
+    vocab_size = ((tokenizer.vocab_size + 63) // 64) * 64
+    print(
+        f"Vocab size: {tokenizer.vocab_size} -> {vocab_size} (padded for GPU efficiency)"
+    )
 
     # Tokenize data
     print("Tokenizing data...")
@@ -258,7 +266,7 @@ def train():
 
     # Create model
     model = Transformer(
-        vocab_size=VOCAB_SIZE,
+        vocab_size=vocab_size,
         embedding_dim=EMBEDDING_DIM,
         num_layers=NUM_LAYERS,
         num_heads=NUM_HEADS,
@@ -282,7 +290,7 @@ def train():
     # Training log
     log = {
         "config": {
-            "vocab_size": VOCAB_SIZE,
+            "vocab_size": vocab_size,
             "context_length": CONTEXT_LENGTH,
             "embedding_dim": EMBEDDING_DIM,
             "num_layers": NUM_LAYERS,

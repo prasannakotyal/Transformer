@@ -17,15 +17,16 @@ class BPETokenizer:
     """
     BPE tokenizer using tiktoken.
 
-    Uses OpenAI's cl100k_base encoding (GPT-4 compatible).
+    Uses OpenAI's gpt2 encoding (50,257 tokens) for efficient training.
+    Following nanoGPT's approach of using pre-trained BPE tokenization.
     """
 
-    def __init__(self, encoding_name: str = "cl100k_base"):
+    def __init__(self, encoding_name: str = "gpt2"):
         """
         Initialize tokenizer.
 
         Args:
-            encoding_name: tiktoken encoding name (default: cl100k_base for GPT-4)
+            encoding_name: tiktoken encoding name (default: gpt2 for GPT-2 compatible)
         """
         self.encoding = tiktoken.get_encoding(encoding_name)
         self.encoding_name = encoding_name

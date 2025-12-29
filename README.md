@@ -140,7 +140,7 @@ python visualize.py --plot kv_cache_speedup
 ## References
 
 - [Attention Is All You Need](https://arxiv.org/abs/1706.03762) - Original transformer paper
-- [Language Models are Unsupervised Multitask Learners](https://d4mucfpksywv.cloudfront.net/better-language-models/language_models_are_unsupervised_multitask_learners.pdf) - GPT-2 paper (pre-norm, GELU)
+- [Language Models are Unsupervised Multitask Learners](https://cdn.openai.com/better-language-models/language_models_are_unsupervised_multitask_learners.pdf) - GPT-2 paper (pre-norm, GELU)
 - [nanoGPT](https://github.com/karpathy/nanoGPT) - Karpathy's training loop reference
 - [tiktoken](https://github.com/openai/tiktoken) - OpenAI's BPE tokenizer
 

@@ -2,7 +2,7 @@
 Training script for Transformer Language Model.
 
 Downloads FineWeb-Edu data and trains the model using gradient accumulation
-and mixed precision. Designed to run on Kaggle T4 GPU in ~3-5 hours.
+and mixed precision. Designed to run on Kaggle T4 GPU in ~8.5 hours.
 
 Features:
 - Gradient accumulation for larger effective batch size
